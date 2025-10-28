@@ -1,0 +1,86 @@
+name: Deploy to Amazon ECS
+
+on:
+  push:
+    branches: [ "main" ]
+
+environment {
+    AWS_DEFAULT_REGION = 'us-east-1'
+    AWS_ACCOUNT_ID = '266735804669'
+    BACKEND_REPO = '266735804669.dkr.ecr.us-east-1.amazonaws.com/mern-backend'
+    FRONTEND_REPO = '266735804669.dkr.ecr.us-east-1.amazonaws.com/mern-frontend'
+    IMAGE_TAG = "v${BUILD_NUMBER}"
+    AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')     // Jenkins credential ID
+    AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key') // Jenkins credential ID
+}
+
+options {
+    skipStagesAfterUnstable()
+}
+
+stages {
+    stage('Checkout Code') {
+        steps {
+            git branch: 'main', url: 'https://github.com/your-org/your-mern-repo.git'
+        }
+    }
+
+    stage('Login to AWS ECR') {
+        steps {
+            script {
+                sh """
+                    aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                    aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                    aws configure set default.region $AWS_DEFAULT_REGION
+
+                    aws ecr get-login-password --region $AWS_DEFAULT_REGION | \
+                      docker login --username AWS --password-stdin $BACKEND_REPO
+
+                    aws ecr get-login-password --region $AWS_DEFAULT_REGION | \
+                      docker login --username AWS --password-stdin $FRONTEND_REPO
+                """
+            }
+        }
+    }
+
+    stage('Build Docker Images') {
+        steps {
+            sh 'docker build -t mern-backend:${IMAGE_TAG} ./backend'
+            sh 'docker build -t mern-frontend:${IMAGE_TAG} ./frontend'
+        }
+    }
+
+    stage('Tag & Push Images to ECR') {
+        steps {
+            sh """
+                docker tag mern-backend:${IMAGE_TAG} $BACKEND_REPO:${IMAGE_TAG}
+                docker tag mern-frontend:${IMAGE_TAG} $FRONTEND_REPO:${IMAGE_TAG}
+
+                docker push $BACKEND_REPO:${IMAGE_TAG}
+                docker push $FRONTEND_REPO:${IMAGE_TAG}
+            """
+        }
+    }
+
+    stage('Deploy to ECS') {
+        steps {
+            sh """
+                aws ecs update-service --cluster mern-cluster --service backend-service \
+                  --force-new-deployment --region $AWS_DEFAULT_REGION
+
+                aws ecs update-service --cluster mern-cluster --service frontend-service \
+                  --force-new-deployment --region $AWS_DEFAULT_REGION
+            """
+        }
+    }
+}
+
+post {
+    success {
+        echo '✅ CI/CD pipeline completed successfully.'
+    }
+    failure {
+        echo '❌ Pipeline failed. Please check the Jenkins logs.'
+    }
+}
+
